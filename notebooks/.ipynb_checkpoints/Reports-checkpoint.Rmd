@@ -1,0 +1,136 @@
+---
+output: html_notebook
+---
+# Setup Notebook
+
+```{r setup}
+knitr::opts_knit$set(root.dir = '..')
+devtools::install_github("tidyverse/ggplot2") #version with stat_qq_line
+```
+
+```{r}
+# Load requirements
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(readr)
+```
+
+# About this noteboook
+This r markdown notebook contains the figures and tables used in reports for this project.
+
+# Milestone Report
+## Background
+The total spending on primary and secondary education is comparable to the federal defense budget.
+
+* [US Defense Budget data](https://www.statista.com/statistics/272473/us-military-spending-from-2000-to-2012/)
+* [Local Education Agency Finance Survey Data Fiscal 2014](https://nces.ed.gov/ccd/data/zip/sdf14_1a_flat.zip)
+
+```{r}
+# Read in fiscal 2014 financial data
+data <- read.table(unz('data/finance_fiscal2014.txt.zip', 'finance_fiscal2014.txt'), sep='\t', header=TRUE, quote='', comment.char='')
+
+# Create dataframe to represent defense spending
+defense_budget <- data.frame(Type=c('Defense', 'Defense', 'Defense'), Source=c('Federal', 'State', 'Local'), Spend=c(609910000000, 0, 0))
+
+# Wrangle education and defense data into a single dataframe
+data <- data %>%
+  select(TFEDREV, TSTREV, TLOCREV) %>%
+  summarise(Federal=sum(as.numeric(TFEDREV)), State=sum(as.numeric(TSTREV)), Local=sum(as.numeric(TLOCREV))) %>%
+  gather('Source', 'Spend') %>%
+  bind_cols(Type=c('Education', 'Education', 'Education')) %>%
+  bind_rows(defense_budget) %>%
+  mutate(Spend = Spend / 1000000000)
+
+# Create stacked bar plot
+ed_v_def <- ggplot(data, aes(x=Type, y=Spend, fill=Source)) + 
+  geom_bar(stat="sum", position = "stack") +
+  labs(x='Type', y='Spend ($ Billion)')
+
+# Print stacked bar plot
+ed_v_def
+
+# Save stacked bar plot
+ggsave('output/plots/ed_v_def.png', ed_v_def)
+
+```
+
+6 Percent of Local Education Agencies in 2009-2010 closed within 5 years
+* 381,248 Students
+* $4,032,423,000 Spending
+
+```{r, fig.width=6, fig.height=1.5}
+# Read in 2009-2010 data
+data <- read.csv('output/wrangled_data_ii.csv')
+
+# Calculate percentage of school districst from 2009-2010 that were closed in 2014-2015
+closed_districts <- nrow(filter(data, exist_five_years == 'False'))/nrow(data)
+print(paste('School Districts from 2009-2010 that were closed in 2014-2015:', closed_districts, sep=' '))
+
+# Create stacked bar plot, print bar plot, save bar plot
+closed_districts <- data %>% select(exist_five_years) %>% group_by(exist_five_years) %>% summarize(count=n())
+closed_districts_plot <- ggplot(closed_districts, aes(1, count, fill=exist_five_years, label=count)) +
+  geom_bar(stat="identity") +
+  coord_flip() +
+  geom_text(size = 3, position = position_stack(vjust = 0.5)) +
+  scale_fill_discrete(name="Operational \n2014-2015") +
+  theme(axis.title.y=element_blank(),
+        axis.text.y=element_blank(),
+        axis.ticks.y=element_blank(),
+        text = element_text(size=15)) +
+  ylab('Number of 2009-2010 School Districts')
+closed_districts_plot
+ggsave('output/plots/closed_districts.png', closed_districts_plot)
+
+affected_students <- data %>%
+  filter(exist_five_years == 'False') %>%
+  select(total_students, total_revenue)
+
+print(paste('Total students in closed school distrcts:', sum(affected_students$total_students, na.rm=TRUE), sep=' '))
+print(paste('Total spending on closed school districts:', sum(affected_students$total_revenue, na.rm=TRUE), sep=' '))
+```
+
+
+Even without labels, clustering identified school districts more likely to close
+* Recall (test set): 0.398
+* Precision (test set): 0.411
+
+Recall and Precision were evaluated on a test set during analysis. I did a sanity check by evaluating recall and precision on the entire 2009-2010 dataset.
+
+```{r}
+# Read in cluster results on 2009-2010 data
+data <- read.csv('output/cluster_results.csv')
+
+# Summarize data by cluster
+aggregated_data <- data %>%
+  group_by(cluster) %>%
+  summarize(total_school_districts = n(), 
+            closed_school_districts=sum(label=='True')) %>%
+  select(cluster, total_school_districts, closed_school_districts) %>%
+  mutate(closed_school_districts = closed_school_districts/total_school_districts) %>%
+  arrange(desc(closed_school_districts))
+
+# Create bar plot
+clusters_plot <- ggplot(aggregated_data, aes(x=reorder(cluster, -closed_school_districts),
+                                             y=closed_school_districts,
+                                             fill=total_school_districts,
+                                             label=total_school_districts)) +
+  geom_bar(stat="identity") + 
+  coord_cartesian(ylim = c(0, 0.6)) +
+  geom_text(size = 3, position = position_dodge(width=1), vjust=-0.25) +
+  theme(axis.text.x=element_blank(),
+        axis.ticks.x=element_blank(),
+        text = element_text(size=15)) +
+  ylab('Proportion Closed 2014-2015') +
+  xlab('Clusters') + 
+  scale_fill_continuous(name="Total School Districts \n2009-2010")
+clusters_plot
+ggsave('output/plots/clusters_plot.png', clusters_plot)
+
+# Sanity Check Recall and Precision
+recall <- nrow(data %>% select(label, cluster) %>% filter(label=='True', cluster %in% c(3, 1))) / 
+  nrow(data %>% select(label) %>% filter(label=='True'))
+precision <- nrow(data %>% select(label, cluster) %>% filter(label=='True', cluster %in% c(3, 1))) / 
+  nrow(data %>% select(label, cluster) %>% filter(cluster %in% c(3, 1)))
+```
+

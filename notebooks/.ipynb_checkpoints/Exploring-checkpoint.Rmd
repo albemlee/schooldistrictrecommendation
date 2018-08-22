@@ -1,0 +1,77 @@
+---
+output: html_notebook
+---
+# Setup Notebook
+
+```{r setup}
+knitr::opts_knit$set(root.dir = '..')
+devtools::install_github("tidyverse/ggplot2")
+```
+
+```{r}
+# Load requirements
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+```
+
+# How much data is available?
+
+The dataset is a wrangled version of the common core dataset from NCES. There should be 159 variables and 18,465 observations.
+
+```{r}
+# Load data
+data <- read.csv('output/wrangled_data_ii.csv')
+data <- data %>% mutate_if(is.integer,as.numeric)
+identifiers <- data %>% select('LEAID', 'NAME', 'state_name')
+labels <- data %>% mutate(label = exist_five_years=='False') %>% select('label') 
+features <- data %>% select(-c('LEAID', 'NAME', 'state_name', 'exist_five_years'))
+print(dim(features))
+```
+
+# How much data is missing?
+
+Prior to this analysis, the dataset was already wrangled and variables with more than 1500 missing values were not selected. As a sanity check, I made sure the wrangled dataset does not contain too many missing values.
+
+```{r}
+print(paste('Total Cells', 18465*159, sep=': '))
+print(paste('Total Missing Cells', sum(is.na(features)), sep=': '))
+print(paste('Proportation of Cells Missing', sum(is.na(features))/(18465*159), sep=': '))
+```
+
+Only 4.4% of the cells are missing. Next, I want to know which columns have the most missing values. Given that this dataset was already wrangled, no column should have more than 1500 missing values.
+
+```{r}
+for(column in names(features)){
+  print(paste(column, sum(is.na(select(features, column))), sep=': '))
+}
+
+```
+
+# Which variables are normally distributed?
+
+Given the size of the dataset (~18000 observations), statistical tests for normality would not work (always reject null hypothesis). Instead, I visually inspected q-q plots to determine normality.
+
+```{r}
+# numerical data
+numerical_features <- features %>% select(-c('lowest_grade', 'highest_grade', 'metro_micro', 'bureau_indian_education', 'charter_status'))
+
+for(feature in names(numerical_features)){
+  qqplot_obj <- ggplot(data, aes_string(sample=feature)) + stat_qq() + stat_qq_line()
+  ggsave(paste('output/plots/', feature, '_qqplot.png', sep=''), qqplot_obj)
+}
+```
+
+# Which variables are correlated with whether school district is at-risk?
+
+Given that there are over 150 variables, it would make sense to prioritize exploring the variables most correlated with exist_five_years.
+
+```{r}
+for(feature in names(numerical_features)){
+  box <- ggplot(data, aes(x=exist_five_years, y=feature)) + geom_boxplot()
+  box
+}
+```
+
+
+

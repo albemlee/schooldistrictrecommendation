@@ -1,0 +1,241 @@
+---
+output: html_notebook
+---
+# Setup Notebook
+
+```{r setup}
+knitr::opts_knit$set(root.dir = '..')
+devtools::install_github("tidyverse/ggplot2") #version with stat_qq_line
+```
+
+```{r}
+# Load requirements
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+```
+
+# How much data is available?
+
+The dataset is a wrangled version of the common core dataset from NCES. There should be 159 variables and 18,465 observations.
+
+```{r}
+# Load data
+data <- read.csv('output/wrangled_data_ii.csv')
+data <- data %>% mutate_if(is.integer,as.numeric)
+identifiers <- data %>% select('LEAID', 'NAME', 'state_name')
+labels <- data %>% mutate(label = exist_five_years=='False') %>% select('label') 
+features <- data %>% select(-c('LEAID', 'NAME', 'state_name', 'exist_five_years'))
+numerical_features <- features %>% select(-c('lowest_grade', 'highest_grade', 'metro_micro', 'bureau_indian_education', 'charter_status'))
+categorical_feature = features %>% select('lowest_grade', 'highest_grade', 'metro_micro', 'bureau_indian_education', 'charter_status')
+print(dim(features))
+```
+
+# How much data is missing?
+
+Prior to this analysis, the dataset was already wrangled and variables with more than 1500 missing values were not selected. As a sanity check, I made sure the wrangled dataset does not contain too many missing values.
+
+```{r}
+print(paste('Total Cells', 18465*159, sep=': '))
+print(paste('Total Missing Cells', sum(is.na(features)), sep=': '))
+print(paste('Proportion of Cells Missing', sum(is.na(features))/(18465*159), sep=': '))
+```
+
+Only 4.4% of the cells are missing. Next, I want to know which columns have the most missing values. Given that this dataset was already wrangled, no column should have more than 1500 missing values.
+
+```{r}
+for(column in names(features)){
+  print(paste(column, sum(is.na(select(features, column))), sep=': '))
+}
+```
+
+# How much data is not applicable?
+
+During data wrangling, values that were "not applicable" were assigned zero. Certain features that only apply to a few school districts would have many zeros.
+
+```{r}
+for(column in names(numerical_features)){
+  subset <- features[!is.na(select(features, column)), column]
+  zeros <- sum(subset==0)
+  print(paste(column, zeros, sep=': '))
+}
+```
+
+Observations:
+
+* There are over 2,000 school districts with total_students==0.
+* There are 1,456 school districts with total_schools==0
+* Aggregated features generally had fewer zeros than specific features (i.e. total_local_revenue had fewer zeros than state_revenue_staff_improvement)
+* Lots of zeros in demographic data (more practical to just combine all minorities into a single feature)
+
+Based on this, I decided to focus on the following numerical features:
+
+1. total_students
+2. total_schools
+3. teachers_total
+4. total_revenue
+5. total_federal_revenue (as percentage of total_revenue)
+6. total_state_revenue (as percentage of total_revenue)
+7. total_local_revenue (as percentage of total_revenue)
+8. total_expenditure
+9. total_salaries
+10. minority_students (as percentage of total_students)
+11. male_students (opposite of total female students, created from summing demographic data, as percentage of total_students)
+
+```{r}
+data_subset <- data %>%
+  mutate(male_students = american_indian_alaskan_native_male_students + 
+           asian_hawaiian_native_pacific_islander_male_students + 
+           hispanic_male_students + 
+           black_non_hispanic_male_students + 
+           white_male_students + 
+           hawaiian_native_pacific_islander_male_students + 
+           mixed_race_male_students) %>%
+  select(total_students, 
+         total_schools, 
+         teachers_total, 
+         total_revenue, 
+         total_federal_revenue, 
+         total_state_revenue, 
+         total_local_revenue, 
+         total_expenditure, 
+         total_salaries, 
+         white_students, 
+         male_students,
+         exist_five_years) %>%
+  mutate(total_revenue = total_federal_revenue + total_state_revenue + total_local_revenue,
+         total_federal_revenue = total_federal_revenue / total_revenue,
+         total_state_revenue = total_state_revenue / total_revenue,
+         total_local_revenue = total_local_revenue / total_revenue,
+         minority_students = 1 - white_students / total_students,
+         male_students = male_students / total_students)
+
+data_subset[!is.na(data_subset$total_revenue) & data_subset$total_revenue == 0, c('total_federal_revenue', 'total_state_revenue', 'total_local_revenue')] <- 0
+data_subset[!is.na(data_subset$total_students) & data_subset$total_students == 0, c('minority_students', 'male_students')] <- NA
+```
+
+# How are numerical variables distributed?
+
+Given the size of the dataset (~18000 observations), statistical tests for normality would not work (always reject null hypothesis). Instead, I visually inspected q-q plots to determine normality.
+
+```{r}
+for(feature in names(data_subset)){
+  if (feature != 'exist_five_years'){
+    qqplot_obj <- ggplot(data_subset, aes_string(sample=feature)) + stat_qq() + stat_qq_line()
+    ggsave(paste('output/plots/', feature, '_qqplot.png', sep=''), qqplot_obj)
+  }
+}
+```
+
+The q-q plots are saved in the 'output/plots' folder. Here are the observations made from visual inspection.
+
+#### total_local_revenue, total_state_revenue, total_federal_revenue, teachers_total, total_expenditure,  total_revenue, total_salaries, total_schools, and total_students are positively skewed.
+
+```{r}
+ggplot(data_subset, aes(sample=total_students)) + stat_qq() + stat_qq_line()
+```
+
+The positive skew suggests that the data may be lognormally distributed. I performed a log transformation on total_students, and plotted a q-q plot to verify.
+
+```{r}
+ggplot(log(select(data_subset, total_students)), aes(sample=total_students)) + stat_qq() + stat_qq_line()
+```
+
+After the log transformation, total_students seemed much closer to normal distribution with long tails on both sides. Based on the previous observation that other numerical features displayed similar characteristics in q-q plots, I concluded that other numerical features are lognormally distributed as well.
+
+#### male_students displayed heavy tails
+
+```{r}
+ggplot(data_subset, aes(sample=male_students)) + stat_qq() + stat_qq_line()
+```
+
+#### white_students is bi-modally distributed
+
+```{r}
+ggplot(data_subset, aes(sample=white_students)) + stat_qq() + stat_qq_line()
+```
+
+# Which variables are correlated with whether school district is at-risk?
+
+I performed 2-sample t-tests on bootstrap samples of each numerical feature.
+
+H_0: Mean of at-risk school districts is not significantly different than mean of non at-risk school districts
+H_a: Mean of at-risk school districts is significantly different than mean of non at-risk school districts
+
+```{r}
+for(feature in names(data_subset)){
+  data_norisk <- data_subset %>%
+    select(feature, exist_five_years) %>%
+    filter(exist_five_years=="True") %>%
+    filter_(paste('!is.na(', feature, ')', sep=''))
+  data_atrisk <- data_subset %>%
+    select(feature, exist_five_years) %>%
+    filter(exist_five_years=="False") %>%
+    filter_(paste('!is.na(', feature, ')', sep=''))
+  
+  norisk_sample <- sample(data_norisk[, feature], 500, replace = TRUE)
+  atrisk_sample <- sample(data_atrisk[, feature], 500, replace = TRUE)
+  
+  if(feature != 'exist_five_years'){
+    print(feature)
+    print(t.test(norisk_sample, atrisk_sample))
+  }
+}
+```
+
+Using a significant level of 0.01, the significant features are...
+
+* total_students
+* total_schools
+* teachers_total
+* total_revenue
+* total_federal_revenue
+* total_state_revenue
+* total_local_revenue
+* total_expenditure
+* total_salaries
+* minority_students
+
+It is also important to note that federal revenue, although significant, was less significant than state an local revenue. The only non-significant feature was male_students.
+
+# How are categorical variables distributed?
+
+To visualize the distribution of categorical data, I created bar charts with the count of school districts in different categories.
+
+```{r}
+for (feature in names(categorical_feature)){
+  barplot_obj <- ggplot(categorical_feature, aes_string(x=feature)) + geom_bar()
+  ggsave(paste('output/plots/', feature, '_barplot.png', sep=''), barplot_obj)
+}
+```
+The bar plots are saved in the 'output/plots' folder. From visual inspection, none of the categorical features were evenly distributed between classes. The most frequent class in each categorical feature are...
+
+* bureau_indian_education: 2 (no)
+* charter_status: 3 (All associated schools are non-charter schools)
+* highest_grade: 12
+* lowest_grade: PK (Pre-kindergarten)
+* metro_micro: 1 (metropolitan area)
+
+# Which categorical variables are correlated with whether school district is at-risk?
+
+I performed chi-squared tests on each categorical feature with exist_five_years.
+
+H_0: There is no association between the categorical feature and whether the school is at-risk.
+H_a: There is association between the categorical feature and whether the school is at-risk.
+
+```{r}
+for (feature in names(categorical_feature)){
+  print(feature)
+  print(chisq.test(data[, feature], data$exist_five_years))
+}
+```
+
+Using a significance level of 0.01, the significant features are...
+
+* lowest_grade
+* highest_grade
+* metro_micro
+* charter_status
+
+Note: The warnings were due to imbalanced classes, but do not affect the overall conclusion.
+
